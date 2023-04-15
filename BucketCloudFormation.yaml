@@ -1,0 +1,38 @@
+Resources:
+  ImageBucket:
+    Type: "AWS::S3::Bucket"
+    Properties:
+      BucketName: recigen-store-image
+  EssentialBucket:
+    Type: "AWS::S3::Bucket"
+    Properties:
+      BucketName: recigen-essentials
+  WebAppBucket:
+    Type: "AWS::S3::Bucket"
+    Properties:
+      BucketName: recigen-web-app
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: false
+        BlockPublicPolicy: false
+        IgnorePublicAcls: false
+        RestrictPublicBuckets: false
+      WebsiteConfiguration:
+        IndexDocument: index.html
+        ErrorDocument: index.html
+
+  WebAppBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref WebAppBucket
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Action:
+              - "s3:GetObject"
+            Effect: Allow
+            Resource: !Join
+              - ""
+              - - "arn:aws:s3:::"
+                - !Ref WebAppBucket
+                - /*
+            Principal: "*"

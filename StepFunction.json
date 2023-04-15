@@ -1,0 +1,56 @@
+{
+  "StartAt": "Complex Search",
+  "States": {
+    "Complex Search": {
+      "Comment": "Search from the api",
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.type",
+          "StringEquals": "text",
+          "Next": "Get Recipe"
+        },
+        {
+          "Variable": "$.type",
+          "StringEquals": "image",
+          "Next": "Extract from Image"
+        }
+      ]
+    },
+    "Extract from Image": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "Payload": {
+          "Input.$": "$"
+        },
+        "FunctionName.$": "$.extractFromImage"
+      },
+      "ResultPath": "$.lambdaResult",
+      "Next": "Get Recipe"
+    },
+    "Get Recipe": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "Payload": {
+          "Input.$": "$"
+        },
+        "FunctionName.$": "$.getRecipe"
+      },
+      "ResultPath": "$.getRecipeResult",
+      "Next": "Result to Queue"
+    },
+    "Result to Queue": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "Payload": {
+          "Input.$": "$"
+        },
+        "FunctionName.$": "$.resultToQueue"
+      },
+      "End": true
+    }
+  }
+}

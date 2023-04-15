@@ -1,0 +1,280 @@
+Parameters:
+  ArnRole:
+    Type: String
+    Description: Arn of IAM LabRole
+    Default: arn:aws:iam::001897914154:role/LabRole
+
+Resources:
+  URLParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: spoonacularURL
+      Type: String
+      Value: https://api.spoonacular.com
+      Description: The URL for my API endpoint
+
+  SearchRecipeRestApi:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: searchrecipe-api
+      Description: API for searching recipes
+      EndpointConfiguration:
+        Types:
+          - REGIONAL
+      Tags:
+        - Key: "TermAssignment"
+          Value: "v0.1"
+      BinaryMediaTypes:
+        - "image/png"
+        - "image/jpeg"
+        - "multipart/form-data"
+
+  SearchRecipeResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      ParentId: !GetAtt SearchRecipeRestApi.RootResourceId
+      RestApiId: !Ref SearchRecipeRestApi
+      PathPart: searchrecipe
+
+  SearchRecipeMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref SearchRecipeRestApi
+      ResourceId: !Ref SearchRecipeResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${SearchFunction.Arn}/invocations"
+        Credentials: !Ref ArnRole
+        IntegrationHttpMethod: POST
+        RequestTemplates:
+          multipart/form-data: |
+            {
+              "image":"$input.body"
+            }
+          image/jpeg: |
+            {
+              "image":"$input.body",
+              "image_type": "jpeg"
+            }
+          image/png: |
+            {
+              "image":"$input.body",
+              "image_type": "png"
+            }
+        ContentHandling: CONVERT_TO_TEXT
+        IntegrationResponses:
+          - StatusCode: "200"
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+            ResponseTemplates:
+              application/json: ""
+      MethodResponses:
+        - StatusCode: "200"
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+          ResponseModels:
+            application/json: "Empty"
+        - StatusCode: "500"
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+
+  SearchRecipeDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn:
+      - SearchRecipeMethod
+    Properties:
+      RestApiId: !Ref SearchRecipeRestApi
+      StageName: prod
+
+  SearchFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: searchFunction
+      Code:
+        S3Bucket: recigen-essentials
+        S3Key: searchFunction.zip
+      Handler: searchFunction.lambda_handler
+      Role: !Ref ArnRole
+      Runtime: python3.9
+      Timeout: 120
+      Environment:
+        Variables:
+          PollUrl: !Sub "https://${PollApi}.execute-api.${AWS::Region}.amazonaws.com/prod/poll"
+          StepFunc: !Ref StepFunction
+          SaveImageLambda: !GetAtt SaveImage.Arn
+          ExtractFromImage: !GetAtt ExtractFromImage.Arn
+          GetRecipe: !GetAtt GetRecipe.Arn
+          ResultToQueue: !GetAtt ResultToQueue.Arn
+
+  SaveImage:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: saveImage
+      Code:
+        S3Bucket: recigen-essentials
+        S3Key: saveImage.zip
+      Handler: saveImage.lambda_handler
+      Role: !Ref ArnRole
+      Runtime: python3.9
+      Timeout: 120
+      Environment:
+        Variables:
+          ImageBucket: "recigen-store-image"
+
+  SearchRecipeAPIGatewayPermission:
+    Type: "AWS::Lambda::Permission"
+    Properties:
+      Action: "lambda:InvokeFunction"
+      FunctionName: !GetAtt SearchFunction.Arn
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${SearchRecipeRestApi}/*/POST/searchrecipe
+    DependsOn:
+      - SearchRecipeDeployment
+
+  StepFunction:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      StateMachineName: ParseSearch
+      DefinitionS3Location:
+        Bucket: recigen-essentials
+        Key: StepFunction.json
+      RoleArn: !Ref ArnRole
+
+  ExtractFromImage:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: extractFromImage
+      Code:
+        S3Bucket: recigen-essentials
+        S3Key: extractFromImage.zip
+      Handler: extractFromImage.lambda_handler
+      Role: !Ref ArnRole
+      Runtime: python3.9
+      Timeout: 120
+
+  GetRecipe:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: getRecipe
+      Code:
+        S3Bucket: recigen-essentials
+        S3Key: getRecipe.zip
+      Handler: getRecipe.lambda_handler
+      Role: !Ref ArnRole
+      Runtime: python3.9
+      Timeout: 120
+      Layers:
+        - !Ref RequestsLayer
+
+  RequestsLayer:
+    Type: "AWS::Lambda::LayerVersion"
+    Properties:
+      LayerName: requests
+      Description: "Python library requests"
+      Content:
+        S3Bucket: recigen-essentials
+        S3Key: requestsLayer.zip
+      CompatibleRuntimes:
+        - python3.9
+
+  ResultToQueue:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: resultToQueue
+      Code:
+        S3Bucket: recigen-essentials
+        S3Key: resultToQueue.zip
+      Handler: resultToQueue.lambda_handler
+      Role: !Ref ArnRole
+      Runtime: python3.9
+      Timeout: 120
+      Environment:
+        Variables:
+          QueueUrl: !GetAtt RecipeQueue.QueueUrl
+
+  RecipeQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: recipe-queue
+      DelaySeconds: 0
+      MaximumMessageSize: 262144
+      MessageRetentionPeriod: 345600
+      ReceiveMessageWaitTimeSeconds: 20
+      VisibilityTimeout: 30
+
+  PollApi:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: pollapi
+      EndpointConfiguration:
+        Types:
+          - REGIONAL
+      Tags:
+        - Key: "TermAssignment"
+          Value: "v0.1"
+
+  PollResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      ParentId: !GetAtt PollApi.RootResourceId
+      PathPart: poll
+      RestApiId: !Ref PollApi
+
+  PollMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      ResourceId: !Ref PollResource
+      RestApiId: !Ref PollApi
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${PollRecipe.Arn}/invocations"
+        IntegrationHttpMethod: POST
+        IntegrationResponses:
+          - StatusCode: "200"
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+            ResponseTemplates:
+              application/json: ""
+      MethodResponses:
+        - StatusCode: "200"
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+          ResponseModels:
+            application/json: "Empty"
+
+  PollDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn:
+      - PollMethod
+    Properties:
+      RestApiId: !Ref PollApi
+      StageName: prod
+
+  PollRecipe:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: pollRecipe
+      Code:
+        S3Bucket: recigen-essentials
+        S3Key: pollRecipe.zip
+      Handler: pollRecipe.lambda_handler
+      Role: !Ref ArnRole
+      Runtime: python3.9
+      Timeout: 120
+      Environment:
+        Variables:
+          QueueUrl: !GetAtt RecipeQueue.QueueUrl
+
+  PollAPIGatewayPermission:
+    Type: "AWS::Lambda::Permission"
+    Properties:
+      Action: "lambda:InvokeFunction"
+      FunctionName: !GetAtt PollRecipe.Arn
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${PollApi}/*/POST/poll
+    DependsOn:
+      - PollDeployment
